@@ -2,7 +2,8 @@ import { CATEGORY_CONFIG, CATEGORY_KEYS } from '../../config/categories.js';
 
 /**
  * 分類 checkbox。分類清單來自 config/categories.js，新增分類不需要改這裡。
- * 目前沒有資料來源的分類會標示「尚無資料來源」，避免誤以為該分類真的是 0 間。
+ * 後端（/api/sources）目前沒有資料來源的分類會標示「尚無資料來源」，避免誤以為該分類真的是 0 間。
+ * categoriesWithSource 為 null 表示來源清單尚未取得，此時不顯示標籤。
  */
 export default function CategoryFilter({ selected, onToggle, onSelectAll, onClearAll, categoriesWithSource }) {
   return (
@@ -19,7 +20,7 @@ export default function CategoryFilter({ selected, onToggle, onSelectAll, onClea
       <ul className="category-filter__list">
         {CATEGORY_KEYS.map((key) => {
           const config = CATEGORY_CONFIG[key];
-          const hasSource = categoriesWithSource.has(key);
+          const hasSource = !categoriesWithSource || categoriesWithSource.has(key);
           return (
             <li key={key}>
               <label className="category-filter__item">

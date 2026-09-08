@@ -8,3 +8,15 @@ npm-debug.log*
 .DS_Store
 .env.development
 innor_serve.rar
+
+# backend
+backend/.venv
+backend/data
+backend/.env
+backend/**/__pycache__
+backend/.pytest_cache
+
+# env / python caches (any location)
+.env
+__pycache__/
+*.pyc

@@ -1,6 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
 import { CATEGORY_KEYS } from './config/categories.js';
-import { getCategoriesWithDataSource } from './services/taipeiApi.js';
 import { useFacilities } from './hooks/useFacilities.js';
 import {
   buildSearchIndex,
@@ -15,6 +14,7 @@ import {
   HeaderStatus,
   LoadingNotice,
   PartialErrorNotice,
+  SyncingNotice,
 } from './components/Status/DataStatus.jsx';
 
 function buildCategorySelection(checked) {
@@ -22,7 +22,20 @@ function buildCategorySelection(checked) {
 }
 
 export default function App() {
-  const { status, facilities, sourceResults, sourceErrors, error, loadedAt, reload } = useFacilities();
+  const {
+    status,
+    facilities,
+    sources,
+    categories,
+    sourceResults,
+    sourceErrors,
+    pendingSources,
+    categoriesWithSource,
+    syncRunning,
+    error,
+    loadedAt,
+    reload,
+  } = useFacilities();
 
   const [searchText, setSearchText] = useState('');
   const [selectedCategories, setSelectedCategories] = useState(() => buildCategorySelection(true));
@@ -37,9 +50,15 @@ export default function App() {
     [searchIndex, selectedCategories, query],
   );
 
+  // 只有具備官方座標的設施才建立 marker；缺座標的仍會被搜尋與統計
+  const mapFacilities = useMemo(() => filteredFacilities.filter((f) => f.hasCoordinates), [filteredFacilities]);
+
   const totalCounts = useMemo(() => countByCategory(facilities), [facilities]);
   const visibleCounts = useMemo(() => countByCategory(filteredFacilities), [filteredFacilities]);
-  const categoriesWithSource = useMemo(() => getCategoriesWithDataSource(), []);
+  const missingCounts = useMemo(
+    () => countByCategory(facilities.filter((f) => !f.hasCoordinates)),
+    [facilities],
+  );
 
   const handleToggleCategory = useCallback((key) => {
     setSelectedCategories((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -53,10 +72,10 @@ export default function App() {
       <header className="app-header">
         <div className="app-header__title">
           <h1>臺北市公共服務設施 GIS</h1>
-          <span className="app-header__subtitle">公共服務設施分布地圖　V1 基礎版</span>
+          <span className="app-header__subtitle">公共服務設施分布地圖　資料由 FastAPI 後端提供</span>
         </div>
         <div className="app-header__status">
-          <HeaderStatus status={status} total={facilities.length} />
+          <HeaderStatus status={status} total={facilities.length} syncRunning={syncRunning} />
         </div>
       </header>
 
@@ -73,11 +92,18 @@ export default function App() {
           categoriesWithSource={categoriesWithSource}
           status={status}
           visibleTotal={filteredFacilities.length}
+          visibleOnMap={mapFacilities.length}
           loadedTotal={facilities.length}
           visibleCounts={visibleCounts}
           totalCounts={totalCounts}
+          missingCounts={missingCounts}
+          categories={categories}
+          sources={sources}
           sourceResults={sourceResults}
+          sourceErrors={sourceErrors}
+          pendingSources={pendingSources}
           loadedAt={loadedAt}
+          syncRunning={syncRunning}
         />
 
         <main className="map-area">
@@ -91,12 +117,17 @@ export default function App() {
               <ErrorNotice error={error} onRetry={reload} />
             </div>
           )}
-          {status === 'success' && sourceErrors.length > 0 && (
+          {status === 'success' && syncRunning && (
+            <div className="map-overlay">
+              <SyncingNotice pendingSources={pendingSources} />
+            </div>
+          )}
+          {status === 'success' && !syncRunning && sourceErrors.length > 0 && (
             <div className="map-overlay">
               <PartialErrorNotice errors={sourceErrors} onRetry={reload} />
             </div>
           )}
-          <FacilityMap facilities={filteredFacilities} />
+          <FacilityMap facilities={mapFacilities} />
         </main>
       </div>
     </div>

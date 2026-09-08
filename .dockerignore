@@ -1,0 +1,14 @@
+# 前端 image 的 build context 只需要 package*.json、index.html、vite.config.js、src/、docker/nginx.conf
+node_modules
+dist
+dist-ssr
+backend
+.git
+.claude
+*.rar
+.env
+.env.*
+README.md
+Dockerfile
+.dockerignore
+docker-compose.yml

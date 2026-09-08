@@ -2,101 +2,89 @@ import { DEFAULT_CATEGORY, isKnownCategory } from '../config/categories.js';
 import { isValidLatLng, toCoordinate } from './geo.js';
 
 /**
- * 統一資料格式（所有資料來源都要轉成這個形狀）：
+ * 前端統一資料格式（由後端 /api/facilities 的每一筆轉換而來）：
  * {
- *   id: string,
- *   name: string,        // 原始名稱，可能為空字串；顯示時用 getDisplayName()
- *   category: string,    // config/categories.js 的 key
- *   address: string,     // 可能為空字串；顯示時用 displayOrNotProvided()
- *   phone: string,       // 可能為空字串；顯示時用 displayOrNotProvided()
- *   lat: number,
- *   lng: number,
- *   source: string,
- *   raw: object          // 原始 CSV row，保留給除錯與未來擴充
+ *   id, name, category, address, phone, district,
+ *   lat, lng,            // 只有 hasCoordinates 為 true 時有值，否則 null
+ *   hasCoordinates,      // true 才會建立 marker
+ *   coordinateStatus, coordinateLevel, coordinateSource,
+ *   source, sourceId, sourceUrl, sourceOrganization, sourceDownloadUrl, sourceSyncedAt,
+ *   externalId, externalType, rawUpdatedAt, updatedAt,
+ *   raw                  // 後端回傳的原始 item，保留給除錯
  * }
+ *
+ * 政府資料的解析、清洗、去重、座標驗證都在後端完成（backend/app/services/normalizer.py）；
+ * 這裡只做欄位命名轉換與最後一道座標防呆，絕不推估座標。
  */
 
 export const UNNAMED_FACILITY_LABEL = '未命名機構';
 export const NOT_PROVIDED_LABEL = '未提供';
 
-/** 臺北市資料大平台常見欄位對應（CSV 欄位 → 統一格式欄位） */
-export const DEFAULT_FIELD_MAP = {
-  id: '_id',
-  name: '機構名稱',
-  address: '地址',
-  phone: '電話',
-  lng: '經度',
-  lat: '緯度',
-};
-
-function pick(row, key) {
-  if (!key) return '';
-  const value = row[key];
+function text(value) {
   if (value === undefined || value === null) return '';
   return String(value).trim();
 }
 
+function toDate(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 /**
- * 把一筆原始 row 轉成統一格式。
- * 座標無效（空白、非數字、超出範圍）時回傳 null，呼叫端不應為它建立 marker。
- *
- * @param {object} row Papa Parse 解析後的一列
- * @param {object} options
- * @param {object} [options.fieldMap]  欄位對應
- * @param {string} [options.category] 分類 key
- * @param {string} [options.source]   資料提供單位
- * @param {string} [options.idPrefix] id 前綴（避免不同來源 id 撞名）
- * @param {number} [options.index]    在來源中的序號，無 _id 時作為備援 id
- * @returns {object|null}
+ * 後端 API 的一筆設施 → 前端統一格式。id 缺失時回傳 null。
  */
-export function normalizeFacility(row, options = {}) {
-  const {
-    fieldMap = DEFAULT_FIELD_MAP,
-    category = DEFAULT_CATEGORY,
-    source = '',
-    idPrefix = '',
-    index = 0,
-  } = options;
+export function normalizeApiFacility(item) {
+  if (!item || typeof item !== 'object') return null;
+  const id = text(item.id);
+  if (!id) return null;
 
-  if (!row || typeof row !== 'object') return null;
-
-  const lat = toCoordinate(pick(row, fieldMap.lat));
-  const lng = toCoordinate(pick(row, fieldMap.lng));
-  if (!isValidLatLng(lat, lng)) return null;
-
-  const rawId = pick(row, fieldMap.id);
-  const id = `${idPrefix || category}-${rawId || index + 1}`;
+  const lat = toCoordinate(item.lat);
+  const lng = toCoordinate(item.lng);
+  const hasCoordinates = item.coordinate_status === 'ok' && isValidLatLng(lat, lng);
 
   return {
     id,
-    name: pick(row, fieldMap.name),
-    category: isKnownCategory(category) ? category : DEFAULT_CATEGORY,
-    address: pick(row, fieldMap.address),
-    phone: pick(row, fieldMap.phone),
-    lat,
-    lng,
-    source,
-    raw: row,
+    name: text(item.name),
+    category: isKnownCategory(item.category) ? item.category : DEFAULT_CATEGORY,
+    address: text(item.address),
+    phone: text(item.phone),
+    district: text(item.district),
+    lat: hasCoordinates ? lat : null,
+    lng: hasCoordinates ? lng : null,
+    hasCoordinates,
+    coordinateStatus: hasCoordinates ? 'ok' : 'missing',
+    coordinateLevel: hasCoordinates ? item.coordinate_level ?? null : null,
+    coordinateSource: text(item.coordinate_source),
+    source: text(item.source),
+    sourceId: text(item.source_id),
+    sourceUrl: text(item.source_url),
+    sourceOrganization: text(item.source_organization),
+    sourceDownloadUrl: text(item.source_download_url),
+    sourceSyncedAt: toDate(item.source_synced_at),
+    externalId: text(item.external_id),
+    externalType: text(item.external_type),
+    rawUpdatedAt: text(item.raw_updated_at),
+    updatedAt: toDate(item.updated_at),
+    raw: item,
   };
 }
 
 /**
- * 批次轉換。回傳有效資料與被略過（座標無效）的筆數。
+ * 批次轉換。回傳有效資料與被略過（缺 id）的筆數。
  * @returns {{ facilities: object[], skipped: number }}
  */
-export function normalizeFacilities(rows, options = {}) {
+export function normalizeApiFacilities(items) {
   const facilities = [];
   let skipped = 0;
-
-  rows.forEach((row, index) => {
-    const facility = normalizeFacility(row, { ...options, index });
+  (Array.isArray(items) ? items : []).forEach((item) => {
+    const facility = normalizeApiFacility(item);
     if (facility) {
       facilities.push(facility);
     } else {
       skipped += 1;
     }
   });
-
   return { facilities, skipped };
 }
 
@@ -108,4 +96,19 @@ export function getDisplayName(facility) {
 /** 顯示用欄位：空值顯示「未提供」 */
 export function displayOrNotProvided(value) {
   return value ? value : NOT_PROVIDED_LABEL;
+}
+
+/** 座標可信度說明（對應後端 coordinate_level） */
+export function describeCoordinateLevel(facility) {
+  if (!facility?.hasCoordinates) return '無官方座標，不顯示於地圖';
+  switch (facility.coordinateLevel) {
+    case 1:
+      return '官方資料直接提供的 WGS84 座標（Level 1）';
+    case 2:
+      return '由另一份官方空間資料對應取得（Level 2）';
+    case 3:
+      return '官方定位服務轉換（Level 3）';
+    default:
+      return '官方座標';
+  }
 }

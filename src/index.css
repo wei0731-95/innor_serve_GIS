@@ -183,6 +183,41 @@ button, input { font-family: inherit; }
 }
 .leaflet-popup-content { margin: 12px 14px; }
 
+/* ---------- Popup：資料來源追溯區 ---------- */
+.facility-popup__source dl { margin: 0; }
+.facility-popup__source-title {
+  margin-bottom: 4px; font-weight: 600; font-size: 12px; color: var(--color-primary-dark);
+}
+.facility-popup__source dt { flex: 0 0 4.5em; }
+.facility-popup__source a { color: var(--color-primary); }
+
+/* ---------- Statistics：資料來源同步狀態 ---------- */
+.statistics__summary {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; margin: 0 0 8px;
+}
+.statistics__summary > div { display: flex; justify-content: space-between; gap: 6px; }
+.statistics__summary dt { color: var(--color-text-muted); }
+.statistics__summary dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 600; }
+.statistics__summary dd.is-error { color: var(--color-danger); }
+.statistics__source-list { list-style: none; margin: 0 0 6px; padding: 0; }
+.statistics__source {
+  display: grid; grid-template-columns: 10px 1fr; column-gap: 6px; align-items: baseline;
+  padding: 3px 0; border-top: 1px solid #eef0f3;
+}
+.statistics__source-status {
+  width: 8px; height: 8px; border-radius: 50%; background: #9ca3af; align-self: center;
+}
+.statistics__source--success .statistics__source-status { background: #16a34a; }
+.statistics__source--error .statistics__source-status { background: var(--color-danger); }
+.statistics__source--running .statistics__source-status { background: var(--color-warning); }
+.statistics__source-name { font-weight: 600; }
+.statistics__source-detail { grid-column: 2; color: var(--color-text-muted); }
+.statistics__source-error { grid-column: 2; color: var(--color-danger); word-break: break-all; }
+
+/* ---------- Notices：後端同步中 ---------- */
+.notice--info { display: flex; align-items: flex-start; gap: 10px; border-left-color: var(--color-warning); }
+.notice--info .notice__spinner { flex: 0 0 auto; margin-top: 2px; }
+
 /* ---------- Responsive（桌面優先，窄螢幕時側欄改為上方可收合面板） ---------- */
 @media (max-width: 768px) {
   .app-header { padding: 0 12px; }

@@ -12,6 +12,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "preview"],
       "port": 4173
+    },
+    {
+      "name": "fastapi",
+      "runtimeExecutable": "backend/.venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "uvicorn", "app.main:app", "--app-dir", "backend", "--host", "127.0.0.1", "--port", "8000"],
+      "port": 8000
     }
   ]
 }

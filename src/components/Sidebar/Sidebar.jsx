@@ -18,11 +18,18 @@ export default function Sidebar({
   categoriesWithSource,
   status,
   visibleTotal,
+  visibleOnMap,
   loadedTotal,
   visibleCounts,
   totalCounts,
+  missingCounts,
+  categories,
+  sources,
   sourceResults,
+  sourceErrors,
+  pendingSources,
   loadedAt,
+  syncRunning,
 }) {
   return (
     <aside className={open ? 'sidebar' : 'sidebar sidebar--collapsed'} aria-label="篩選與統計">
@@ -53,11 +60,18 @@ export default function Sidebar({
             <Statistics
               status={status}
               visibleTotal={visibleTotal}
+              visibleOnMap={visibleOnMap}
               loadedTotal={loadedTotal}
               visibleCounts={visibleCounts}
               totalCounts={totalCounts}
+              missingCounts={missingCounts}
+              categories={categories}
+              sources={sources}
               sourceResults={sourceResults}
+              sourceErrors={sourceErrors}
+              pendingSources={pendingSources}
               loadedAt={loadedAt}
+              syncRunning={syncRunning}
             />
           </section>
         </div>

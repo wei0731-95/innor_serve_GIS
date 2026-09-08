@@ -1,0 +1,68 @@
+# CityGap：docker compose up --build 一個指令啟動前端 + 後端 + SQLite
+#
+#   前端  http://localhost:3000        （nginx 靜態檔 + /api 轉給 backend）
+#   後端  http://localhost:8000        （FastAPI；Swagger 在 /docs，health 在 /api/health）
+#   資料  ./backend/data/citygap.db     （bind mount，container 重建後資料仍在）
+#
+# 可用專案根目錄的 .env（已 gitignore）覆寫下列 ${VAR:-預設值}，範例見 .env.example。
+name: citygap
+
+services:
+  backend:
+    build:
+      context: ./backend
+    image: citygap-backend
+    container_name: citygap-backend
+    ports:
+      # 對外 port 可用 BACKEND_PORT 覆寫（例如 8000 已被其他專案占用時）；container 內固定 8000
+      - "${BACKEND_PORT:-8000}:8000"
+    environment:
+      # SQLite 與下載快取都放在 /app/data（對應宿主機 ./backend/data）
+      DATABASE_URL: sqlite:////app/data/citygap.db
+      CACHE_DIR: /app/data/cache
+      # 允許的瀏覽器來源：Docker 前端 3000、Vite dev server 5173 / 5174。不使用 "*"。
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174}
+      # 啟動時在背景同步政府開放資料（不阻塞 API）
+      SYNC_ON_STARTUP: ${SYNC_ON_STARTUP:-true}
+      HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-90}
+      HTTP_MAX_RETRIES: ${HTTP_MAX_RETRIES:-2}
+      # 台灣政府主機憑證鏈缺 Subject Key Identifier，Python 3.13 嚴格模式會拒絕（CA 與主機名稱驗證仍啟用）
+      SSL_STRICT_X509: ${SSL_STRICT_X509:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - ./backend/data:/app/data
+    healthcheck:
+      # slim image 沒有 curl，用 Python 標準庫打 /api/health
+      test:
+        - CMD
+        - python
+        - -c
+        - "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4).status == 200 else 1)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # 預設空字串 → 同源 /api（nginx 轉給 backend）。要讓瀏覽器直接打別的後端位址才需要設定。
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
+    image: citygap-frontend
+    container_name: citygap-frontend
+    ports:
+      # 對外 port 可用 FRONTEND_PORT 覆寫；container 內 nginx 固定 80
+      - "${FRONTEND_PORT:-3000}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
