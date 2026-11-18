@@ -110,13 +110,15 @@ function synthesizeHard(payload, c, fs, amp = 0.6) {
 
 // ---------- 接收端（串流處理） ----------
 class Receiver {
-  constructor(fs, cfg, onMessage, onLevel) {
+  constructor(fs, cfg, onMessage, onLevel, shared) {
     this.fs = fs; this.c = Object.assign({}, DEFAULTS, cfg || {});
     this.onMessage = onMessage || (() => {}); this.onLevel = onLevel || (() => {});
     this.F = freqs(this.c); this.N = Math.round(this.c.ts * fs);
     this.hop = Math.max(1, Math.round(this.N / 12)); this.k = Math.round(this.N / this.hop);
     this.Wd = Math.round(this.N * 0.75);
-    this.cap = Math.round(fs * 24); this.buf = new Float32Array(this.cap);
+    if (shared) { this.buf = shared.buf; this.cap = shared.cap; }
+    else { this.cap = Math.round(fs * 16); this.buf = new Float32Array(this.cap); }
+    this.scan = !!this.c.scan;  // 掃描模式：只算同步音與 4 個參考頻道，供自動偵測同時跑多組設定
     this.total = 0; this.nextHop = this.Wd; this.hist = [];
     this.state = 'search'; this.quietUntil = 0; this.thr = 0.3;
     this.coef = this.F.map(f => 2 * Math.cos(2 * Math.PI * f / fs)); this.win = {};
@@ -130,17 +132,18 @@ class Receiver {
     return s1 * s1 + s2 * s2 - c * s1 * s2; }); }
   push(chunk) {
     for (let i = 0; i < chunk.length; i++) this.buf[(this.total + i) % this.cap] = chunk[i];
-    this.total += chunk.length;
-    while (this.total >= this.nextHop) { this.onHop(this.nextHop); this.nextHop += this.hop; }
-    this.advance();
+    this.total += chunk.length; this.run();
   }
+  run() { while (this.total >= this.nextHop) { this.onHop(this.nextHop); this.nextHop += this.hop; } this.advance(); }
   onHop(t) {
-    const P = this.powers(this.seg(t - this.Wd, this.Wd), ALL);
-    const sum = P.reduce((a, b) => a + b, 0) + 1e-12;
-    this.hist.push({ t, a: P[0] / sum, b: P[1] / sum }); if (this.hist.length > 6 * this.k) this.hist.shift();
+    const x = this.seg(t - this.Wd, this.Wd); let P = null, ra, rb;
+    if (this.scan) { // 只算同步音 A、B 和 4 個參考頻道（窄頻比較，寬頻噪音影響小），計算量約為完整模式的 1/3
+      const Q = this.powers(x, SCAN), sum = Q.reduce((u, v) => u + v, 0) + 1e-12; ra = Q[0] / sum; rb = Q[1] / sum;
+    } else { P = this.powers(x, ALL); const sum = P.reduce((a, b) => a + b, 0) + 1e-12; ra = P[0] / sum; rb = P[1] / sum; }
+    this.hist.push({ t, a: ra, b: rb }); if (this.hist.length > 6 * this.k) this.hist.shift();
     const h = this.hist, n = h.length, k = this.k; let score = 0;
     if (n > 3 * k) score = Math.min(h[n - 1].b, h[n - 1 - k].a, h[n - 1 - 2 * k].b, h[n - 1 - 3 * k].a);
-    this.onLevel(P, score, sum / this.Wd);
+    this.onLevel(P, score);
     if (t < this.quietUntil) return;
     if (this.state === 'search' && score > this.thr) { this.state = 'peak'; this.best = { s: score, t }; this.peakUntil = t + this.N; }
     else if (this.state === 'peak') {
@@ -181,7 +184,36 @@ class Receiver {
   }
   reset(until) { this.state = 'search'; this.quietUntil = until; this.hist = []; }
 }
-const ALL = Array.from({ length: NT }, (_, i) => i), DATA = ALL.slice(2);
+// ---------- 自動偵測頻段：同時掃描多組設定，解出第一則訊息後鎖定 ----------
+function biquadHP(fs, fc) { const w = 2 * Math.PI * fc / fs, al = Math.sin(w) / Math.SQRT2, cw = Math.cos(w), a0 = 1 + al;
+  const b0 = (1 + cw) / 2 / a0, b1 = -(1 + cw) / a0, a1 = -2 * cw / a0, a2 = (1 - al) / a0; let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+  return v => { const y = b0 * v + b1 * x1 + b0 * x2 - a1 * y1 - a2 * y2; x2 = x1; x1 = v; y2 = y1; y1 = y; return y; }; }
+const CANDIDATES = [];
+for (const f0 of [16000, 17000, 18000, 18500]) for (const ts of [0.06, 0.1]) CANDIDATES.push(Object.assign({}, DEFAULTS, { f0, ts }));
+class AutoReceiver {
+  constructor(fs, onMessage, onLevel, onLock, cands = CANDIDATES, relockSec = 60) {
+    this.fs = fs; this.cands = cands; this.onMessage = onMessage || (() => {}); this.onLevel = onLevel || (() => {});
+    this.onLock = onLock || (() => {}); this.relock = relockSec * fs;
+    this.cap = Math.round(fs * 16); this.shared = { buf: new Float32Array(this.cap), cap: this.cap };
+    this.total = 0; this.hp = [biquadHP(fs, 14500), biquadHP(fs, 14500)]; this.stats = { ok: 0, fail: 0 }; this.scanAll();
+  }
+  make(c, i) { const r = new Receiver(this.fs, Object.assign({}, c, { scan: true }), m => this.msg(i, m), (P, s) => this.level(i, P, s), this.shared);
+    r.total = this.total; r.nextHop = this.total + r.Wd; return r; }
+  scanAll() { this.lock = -1; this.pending = -1; this.rs = this.cands.map((c, i) => this.make(c, i)); this.score = this.cands.map(() => 0); this.onLock(null); }
+  msg(i, m) { if (m.ok) { this.stats.ok++; this.lastOk = this.total; if (this.lock < 0 && this.pending < 0) this.pending = i; } else this.stats.fail++;
+    m.stats = this.stats; m.cfg = this.cands[i]; this.onMessage(m); }
+  level(i, P, s) { this.score[i] = s; if (this.lock >= 0) this.onLevel(P, s); else if (i === 0) this.onLevel(null, Math.max(...this.score)); }
+  push(chunk) {
+    const [h1, h2] = this.hp, b = this.shared.buf;
+    for (let i = 0; i < chunk.length; i++) b[(this.total + i) % this.cap] = h2(h1(chunk[i]));
+    this.total += chunk.length;
+    for (const r of this.rs) { r.total = this.total; r.run(); }
+    if (this.pending >= 0) { const i = this.pending, r = this.rs[i]; this.pending = -1; this.lock = i;
+      r.scan = false; r.hist = []; this.rs = [r]; this.onLock(this.cands[i]); }
+    else if (this.lock >= 0 && this.total - this.lastOk > this.relock && this.rs[0].state === 'search') this.scanAll();
+  }
+}
+const ALL = Array.from({ length: NT }, (_, i) => i), DATA = ALL.slice(2), SCAN = [0, 1, 3, 7, 11, 15];
 
 // ---------- 封包內容格式 ----------
 // 0x01 模板：[0x01, 模板編號, 參數1, 參數2]；0x02 文字：[0x02, ...UTF-8]
@@ -193,6 +225,6 @@ function parsePayload(p) {
   return { type: 'unknown', bytes: p };
 }
 
-G.HFModem = { DEFAULTS, freqs, frameSymbols, synthesize, synthesizeHard, Receiver, rsEncode, rsDecode,
+G.HFModem = { DEFAULTS, CANDIDATES, AutoReceiver, freqs, frameSymbols, synthesize, synthesizeHard, Receiver, rsEncode, rsDecode,
   encodeTemplate, encodeText, parsePayload };
 })(typeof window !== 'undefined' ? window : globalThis);
