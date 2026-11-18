@@ -62,7 +62,7 @@ function rsDecode(msg, n) { let s = syndromes(msg, n);
   return { data: out.slice(0, -n), fixed: pos.length }; }
 
 // ---------- 調變參數 ----------
-const DEFAULTS = { f0: 17000, df: 100, ts: 0.06, nsym: 6, maxLen: 48 };
+const DEFAULTS = { f0: 18000, df: 75, ts: 0.06, nsym: 6, maxLen: 48 };
 const NT = 18;
 const freqs = c => Array.from({ length: NT }, (_, i) => c.f0 + i * c.df);
 const PRE = [0, 1, 0, 1];
@@ -72,8 +72,29 @@ function frameSymbols(payload, c) {
   const bytes = [payload.length, (~payload.length) & 255].concat(rsEncode(Array.from(payload), c.nsym));
   const sym = PRE.slice(); for (const b of bytes) sym.push(2 + (b >> 4), 2 + (b & 15)); return sym;
 }
-// 產生音訊：連續相位（不會有喀喀聲），頭尾 20ms 淡入淡出
-function synthesize(payload, c, fs, amp = 0.6) {
+// 產生音訊（柔和版）：
+//  1. 頻率切換不是瞬間跳，而是在每個符號前 15% 用餘弦曲線滑過去（接收端只看符號 20%～95%，不受影響）
+//  2. 封包前後各加 100 ms 的同頻延長音，在延長音裡慢慢淡入淡出，避免「喀」一聲
+const GLIDE = 0.15, EDGE = 0.1;
+function synthesize(payload, c, fs, amp = 0.3) {
+  const sym = frameSymbols(payload, c), F = freqs(c), N = Math.round(c.ts * fs);
+  const E = Math.round(EDGE * fs), G = Math.max(1, Math.round(GLIDE * N)), pad = Math.round(0.03 * fs);
+  const total = pad * 2 + E * 2 + N * sym.length, out = new Float32Array(total);
+  let ph = 0, k = pad, prev = F[sym[0]];
+  const tone = (f, n, env) => { const w = 2 * Math.PI * f / fs;
+    for (let i = 0; i < n; i++) { out[k++] = Math.sin(ph) * env(i); ph += w; } };
+  tone(F[sym[0]], E, i => 0.5 - 0.5 * Math.cos(Math.PI * i / E));            // 淡入
+  for (const s of sym) { const f1 = F[s];
+    for (let i = 0; i < N; i++) {
+      const f = i < G ? prev + (f1 - prev) * (0.5 - 0.5 * Math.cos(Math.PI * i / G)) : f1;
+      out[k++] = Math.sin(ph); ph += 2 * Math.PI * f / fs; }
+    ph %= 2 * Math.PI; prev = f1; }
+  tone(prev, E, i => 0.5 + 0.5 * Math.cos(Math.PI * i / E));                 // 淡出
+  for (let i = 0; i < total; i++) out[i] *= amp;
+  return out;
+}
+// 舊版（頻率瞬間切換、20 ms 淡入淡出），保留給比較測試用
+function synthesizeHard(payload, c, fs, amp = 0.6) {
   const sym = frameSymbols(payload, c), F = freqs(c), N = Math.round(c.ts * fs);
   const ramp = Math.round(0.02 * fs), pad = Math.round(0.05 * fs);
   const out = new Float32Array(pad * 2 + N * sym.length); let ph = 0, k = pad;
@@ -172,6 +193,6 @@ function parsePayload(p) {
   return { type: 'unknown', bytes: p };
 }
 
-G.HFModem = { DEFAULTS, freqs, frameSymbols, synthesize, Receiver, rsEncode, rsDecode,
+G.HFModem = { DEFAULTS, freqs, frameSymbols, synthesize, synthesizeHard, Receiver, rsEncode, rsDecode,
   encodeTemplate, encodeText, parsePayload };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -23,6 +23,7 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid 
 .card h2{font-size:17px;margin:0 0 10px}
 .row{display:flex;flex-wrap:wrap;gap:10px;align-items:end}
 .row>label{display:flex;flex-direction:column;gap:4px;font-size:14px;color:var(--mute);flex:1 1 160px}
+.chk{display:flex;gap:10px;align-items:center;font-size:15px;margin-top:10px}.chk input{width:22px;height:22px;min-height:0}
 .hint{font-size:13px;color:var(--mute);margin:8px 0 0}
 .board{background:#050505;color:var(--led);border-radius:14px;padding:22px 20px;min-height:150px;display:flex;flex-direction:column;justify-content:center;font-weight:700;font-size:clamp(22px,5.4vw,36px);line-height:1.3;letter-spacing:.02em;text-shadow:0 0 12px rgba(255,178,30,.35)}
 .board small{display:block;font-size:13px;font-weight:500;color:#9a8a6a;text-shadow:none;margin-top:10px;letter-spacing:0}
@@ -63,10 +64,10 @@ ol#log li{padding:3px 0;border-bottom:1px solid var(--line)}
     <div class="row">
       <label>起始頻率
         <select id="f0">
-          <option value="15000">15 kHz（較容易收到，但多數人聽得見）</option>
-          <option value="16000">16 kHz</option>
-          <option value="17000" selected>17 kHz（建議）</option>
-          <option value="18000">18 kHz（更隱形，喇叭與麥克風可能不支援）</option>
+          <option value="16000">16 kHz（最容易收到，但多數人聽得見）</option>
+          <option value="17000">17 kHz（年輕人可能聽得見）</option>
+          <option value="18000" selected>18 kHz（建議）</option>
+          <option value="18500">18.5 kHz（最隱形，部分喇叭不支援）</option>
         </select></label>
       <label>傳輸模式
         <select id="ts">
@@ -128,14 +129,15 @@ ol#log li{padding:3px 0;border-bottom:1px solid var(--line)}
     <section class="card">
       <h2>發送</h2>
       <div class="row">
-        <label>音量 <input id="vol" type="range" min="0.05" max="1" step="0.05" value="0.5"></label>
+        <label>音量 <input id="vol" type="range" min="0.05" max="1" step="0.05" value="0.3"></label>
       </div>
+      <label class="chk"><input type="checkbox" id="chime" checked> 同時播放「叮咚」提示音（模擬車站廣播，也能蓋掉殘餘的高頻聲）</label>
       <div class="row" style="margin-top:10px">
         <button class="pri" id="sendBtn">發送一次</button>
         <button id="loopBtn">每 3 秒重複發送</button>
         <button id="wavBtn">下載 WAV</button>
       </div>
-      <p class="hint">先用中等音量。17 kHz 以上大多數成人聽不見，但兒童和寵物可能聽得到，測試時請勿長時間大音量播放。</p>
+      <p class="hint">音量建議從 0.3 開始，收得到就不要再調大：音量越大，喇叭失真越嚴重，越容易聽到雜音。18 kHz 以上大多數人聽不見，但部分年輕人、兒童和寵物可能聽得到，請勿長時間大音量播放。</p>
     </section>
     <section class="card">
       <h2>硬體測試（第一天就該做）</h2>
@@ -215,7 +217,7 @@ function rsDecode(msg, n) { let s = syndromes(msg, n);
   return { data: out.slice(0, -n), fixed: pos.length }; }
 
 // ---------- 調變參數 ----------
-const DEFAULTS = { f0: 17000, df: 100, ts: 0.06, nsym: 6, maxLen: 48 };
+const DEFAULTS = { f0: 18000, df: 75, ts: 0.06, nsym: 6, maxLen: 48 };
 const NT = 18;
 const freqs = c => Array.from({ length: NT }, (_, i) => c.f0 + i * c.df);
 const PRE = [0, 1, 0, 1];
@@ -225,8 +227,29 @@ function frameSymbols(payload, c) {
   const bytes = [payload.length, (~payload.length) & 255].concat(rsEncode(Array.from(payload), c.nsym));
   const sym = PRE.slice(); for (const b of bytes) sym.push(2 + (b >> 4), 2 + (b & 15)); return sym;
 }
-// 產生音訊：連續相位（不會有喀喀聲），頭尾 20ms 淡入淡出
-function synthesize(payload, c, fs, amp = 0.6) {
+// 產生音訊（柔和版）：
+//  1. 頻率切換不是瞬間跳，而是在每個符號前 15% 用餘弦曲線滑過去（接收端只看符號 20%～95%，不受影響）
+//  2. 封包前後各加 100 ms 的同頻延長音，在延長音裡慢慢淡入淡出，避免「喀」一聲
+const GLIDE = 0.15, EDGE = 0.1;
+function synthesize(payload, c, fs, amp = 0.3) {
+  const sym = frameSymbols(payload, c), F = freqs(c), N = Math.round(c.ts * fs);
+  const E = Math.round(EDGE * fs), G = Math.max(1, Math.round(GLIDE * N)), pad = Math.round(0.03 * fs);
+  const total = pad * 2 + E * 2 + N * sym.length, out = new Float32Array(total);
+  let ph = 0, k = pad, prev = F[sym[0]];
+  const tone = (f, n, env) => { const w = 2 * Math.PI * f / fs;
+    for (let i = 0; i < n; i++) { out[k++] = Math.sin(ph) * env(i); ph += w; } };
+  tone(F[sym[0]], E, i => 0.5 - 0.5 * Math.cos(Math.PI * i / E));            // 淡入
+  for (const s of sym) { const f1 = F[s];
+    for (let i = 0; i < N; i++) {
+      const f = i < G ? prev + (f1 - prev) * (0.5 - 0.5 * Math.cos(Math.PI * i / G)) : f1;
+      out[k++] = Math.sin(ph); ph += 2 * Math.PI * f / fs; }
+    ph %= 2 * Math.PI; prev = f1; }
+  tone(prev, E, i => 0.5 + 0.5 * Math.cos(Math.PI * i / E));                 // 淡出
+  for (let i = 0; i < total; i++) out[i] *= amp;
+  return out;
+}
+// 舊版（頻率瞬間切換、20 ms 淡入淡出），保留給比較測試用
+function synthesizeHard(payload, c, fs, amp = 0.6) {
   const sym = frameSymbols(payload, c), F = freqs(c), N = Math.round(c.ts * fs);
   const ramp = Math.round(0.02 * fs), pad = Math.round(0.05 * fs);
   const out = new Float32Array(pad * 2 + N * sym.length); let ph = 0, k = pad;
@@ -325,7 +348,7 @@ function parsePayload(p) {
   return { type: 'unknown', bytes: p };
 }
 
-G.HFModem = { DEFAULTS, freqs, frameSymbols, synthesize, Receiver, rsEncode, rsDecode,
+G.HFModem = { DEFAULTS, freqs, frameSymbols, synthesize, synthesizeHard, Receiver, rsEncode, rsDecode,
   encodeTemplate, encodeText, parsePayload };
 })(typeof window !== 'undefined' ? window : globalThis);
 </script>
@@ -396,7 +419,16 @@ let actx = null;
 function ac() { if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); actx.resume(); return actx; }
 function play(samples, ctx) { const b = ctx.createBuffer(1, samples.length, ctx.sampleRate); b.copyToChannel(samples, 0);
   const s = ctx.createBufferSource(); s.buffer = b; s.connect(ctx.destination); s.start(); return samples.length / ctx.sampleRate; }
-function send() { try { const ctx = ac(); return play(M.synthesize(payload(), cfg(), ctx.sampleRate, +$('vol').value), ctx); }
+// 叮咚提示音（E5→C5），與高頻訊號混在一起播放
+function withChime(x, fs) {
+  if (!$('chime').checked) return x;
+  const n = Math.max(x.length, Math.round(fs * 1.4)), y = new Float32Array(n); y.set(x);
+  [[659.25, 0], [523.25, 0.55]].forEach(([f, t0]) => { const s = Math.round(t0 * fs), L = Math.round(0.85 * fs);
+    for (let i = 0; i < L && s + i < n; i++) { const t = i / fs, e = Math.min(1, i / (0.005 * fs)) * Math.exp(-4 * t);
+      y[s + i] += 0.22 * e * (Math.sin(2 * Math.PI * f * t) + 0.25 * Math.sin(4 * Math.PI * f * t)); } });
+  return y;
+}
+function send() { try { const ctx = ac(); return play(withChime(M.synthesize(payload(), cfg(), ctx.sampleRate, +$('vol').value), ctx.sampleRate), ctx); }
   catch (e) { $('preview').textContent = '⚠ ' + e.message; return 0; } }
 $('sendBtn').onclick = send;
 let loop = null;
@@ -406,7 +438,7 @@ $('loopBtn').onclick = () => {
   const go = () => { const d = send(); loop = setTimeout(go, (d + 3) * 1000); }; go();
 };
 $('wavBtn').onclick = () => {
-  const fs = 48000, x = M.synthesize(payload(), cfg(), fs, +$('vol').value), n = x.length;
+  const fs = 48000, x = withChime(M.synthesize(payload(), cfg(), fs, +$('vol').value), fs), n = x.length;
   const buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf), w = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
   w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVEfmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
   v.setUint32(24, fs, true); v.setUint32(28, fs * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, n * 2, true);
