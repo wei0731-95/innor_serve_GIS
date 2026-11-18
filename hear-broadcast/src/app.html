@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>聽見廣播 PoC</title>
+<style>
+:root{color-scheme:light dark;--bg:light-dark(#f4f5f7,#0e1013);--card:light-dark(#fff,#181b20);--ink:light-dark(#111,#eceef1);--mute:light-dark(#5b6370,#9aa3ae);--line:light-dark(#dde1e6,#2a2f37);--acc:#0a63ff;--led:#ffb21e;--red:#e5262b}
+*{box-sizing:border-box;min-width:0}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 system-ui,-apple-system,"Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif}
+header{padding:18px max(4vw,16px) 0;max-width:980px;margin:auto}
+h1{font-size:26px;margin:0 0 4px;line-height:1.15}
+header p{margin:0;color:var(--mute);font-size:14px}
+main{max-width:980px;margin:auto;padding:14px max(4vw,16px) 40px}
+.tabs{display:flex;gap:8px;margin:14px 0}
+.tabs button{flex:1}
+button,select,input{font:inherit;font-size:16px;min-height:44px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:8px 14px}
+button{cursor:pointer;font-weight:600}
+button.pri{background:var(--acc);border-color:var(--acc);color:#fff}
+button.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
+.card h2{font-size:17px;margin:0 0 10px}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:end}
+.row>label{display:flex;flex-direction:column;gap:4px;font-size:14px;color:var(--mute);flex:1 1 160px}
+.hint{font-size:13px;color:var(--mute);margin:8px 0 0}
+.board{background:#050505;color:var(--led);border-radius:14px;padding:22px 20px;min-height:150px;display:flex;flex-direction:column;justify-content:center;font-weight:700;font-size:clamp(22px,5.4vw,36px);line-height:1.3;letter-spacing:.02em;text-shadow:0 0 12px rgba(255,178,30,.35)}
+.board small{display:block;font-size:13px;font-weight:500;color:#9a8a6a;text-shadow:none;margin-top:10px;letter-spacing:0}
+.board.idle{color:#6d6250;font-size:18px;text-shadow:none}
+.meters{display:grid;grid-template-columns:repeat(18,minmax(0,1fr));gap:3px;height:90px;align-items:end;margin-top:6px}
+.meters div{background:var(--acc);border-radius:3px 3px 0 0;height:2%;transition:height .08s}
+.meters div.s{background:#9b59ff}
+.mlab{display:grid;grid-template-columns:repeat(18,minmax(0,1fr));gap:3px;font-size:10px;color:var(--mute);text-align:center}
+canvas{width:100%;height:120px;display:block;border-radius:8px;background:light-dark(#f0f2f5,#101317)}
+.stats{display:flex;flex-wrap:wrap;gap:16px;font-size:14px;color:var(--mute);margin-top:10px}
+.stats b{color:var(--ink);font-variant-numeric:tabular-nums}
+.bar{height:8px;border-radius:4px;background:var(--line);overflow:hidden;margin-top:4px}
+.bar i{display:block;height:100%;width:0;background:var(--acc)}
+ol#log{margin:0;padding-left:20px;font-size:14px;max-height:220px;overflow:auto}
+ol#log li{padding:3px 0;border-bottom:1px solid var(--line)}
+.bad{color:var(--red)}
+#emg{position:fixed;inset:0;background:var(--red);color:#fff;display:none;flex-direction:column;align-items:center;justify-content:center;gap:24px;padding:24px;text-align:center;z-index:9;font-size:clamp(26px,7vw,46px);font-weight:800;line-height:1.3}
+#emg.show{display:flex;animation:fl 1s steps(2) infinite}
+#emg button{background:#fff;color:var(--red);border:0;font-size:20px;padding:12px 28px}
+@keyframes fl{50%{background:#7a0d10}}
+@media (prefers-reduced-motion:reduce){#emg.show{animation:none}}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<header>
+  <h1>聽見廣播 · 高頻聲波傳輸 PoC</h1>
+  <p>一台裝置當「發送端」播放 17～19 kHz 聲波，另一台手機當「接收端」解碼並顯示字幕。兩端的設定必須一致。</p>
+</header>
+<main>
+  <div class="tabs" role="tablist">
+    <button id="tabRx" class="on" role="tab">📱 接收端（手機）</button>
+    <button id="tabTx" role="tab">🔊 發送端（筆電）</button>
+  </div>
+
+  <section class="card">
+    <h2>共用設定</h2>
+    <div class="row">
+      <label>起始頻率
+        <select id="f0">
+          <option value="15000">15 kHz（較容易收到，但多數人聽得見）</option>
+          <option value="16000">16 kHz</option>
+          <option value="17000" selected>17 kHz（建議）</option>
+          <option value="18000">18 kHz（更隱形，喇叭與麥克風可能不支援）</option>
+        </select></label>
+      <label>傳輸模式
+        <select id="ts">
+          <option value="0.06" selected>標準（60 ms）</option>
+          <option value="0.1">穩定（100 ms，抗噪）</option>
+        </select></label>
+    </div>
+    <p class="hint" id="bandInfo"></p>
+  </section>
+
+  <!-- 接收端 -->
+  <div id="rxPane">
+    <section class="card">
+      <div class="row" style="margin-bottom:12px">
+        <button class="pri" id="rxBtn">開始接收</button>
+        <label>字幕語言
+          <select id="lang"><option value="zh">中文</option><option value="en">English</option><option value="ja">日本語</option></select></label>
+      </div>
+      <div class="board idle" id="board">尚未收到廣播</div>
+      <div class="stats">
+        <span>成功 <b id="sOk">0</b></span><span>失敗 <b id="sFail">0</b></span>
+        <span>同步分數 <b id="sScore">0.00</b></span><span>取樣率 <b id="sFs">–</b></span>
+      </div>
+      <div class="bar" title="同步分數"><i id="scoreBar"></i></div>
+      <p class="hint" id="rxStatus">按「開始接收」並允許麥克風。手機要保持在這個畫面、不要鎖定螢幕。</p>
+    </section>
+    <section class="card">
+      <h2>即時診斷</h2>
+      <p class="hint" style="margin:0 0 6px">18 個頻道能量（紫色為同步音 A、B，藍色為資料 0～F）。發送時應該看到柱子跳動。</p>
+      <div class="meters" id="meters"></div>
+      <div class="mlab" id="mlab"></div>
+      <p class="hint" style="margin:12px 0 6px">14～22 kHz 頻譜：可確認麥克風有沒有收到高頻。</p>
+      <canvas id="spec"></canvas>
+    </section>
+    <section class="card">
+      <h2>接收紀錄</h2>
+      <ol id="log"></ol>
+    </section>
+  </div>
+
+  <!-- 發送端 -->
+  <div id="txPane" hidden>
+    <section class="card">
+      <h2>廣播內容</h2>
+      <div class="row">
+        <label>類型
+          <select id="kind"><option value="tpl">廣播模板（建議，封包最短）</option><option value="txt">自由文字</option></select></label>
+      </div>
+      <div class="row" id="tplRow" style="margin-top:10px">
+        <label>模板<select id="tpl"></select></label>
+        <label id="p1Lab"><span id="p1Name">分鐘</span><input id="p1" type="number" min="0" max="255" value="5" inputmode="numeric"></label>
+        <label id="stLab">車站<select id="st"></select></label>
+      </div>
+      <div class="row" id="txtRow" hidden style="margin-top:10px">
+        <label>文字（最多約 15 個中文字）<input id="txt" maxlength="40" value="列車延誤5分鐘"></label>
+      </div>
+      <p class="hint" id="preview"></p>
+    </section>
+    <section class="card">
+      <h2>發送</h2>
+      <div class="row">
+        <label>音量 <input id="vol" type="range" min="0.05" max="1" step="0.05" value="0.5"></label>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="pri" id="sendBtn">發送一次</button>
+        <button id="loopBtn">每 3 秒重複發送</button>
+        <button id="wavBtn">下載 WAV</button>
+      </div>
+      <p class="hint">先用中等音量。17 kHz 以上大多數成人聽不見，但兒童和寵物可能聽得到，測試時請勿長時間大音量播放。</p>
+    </section>
+    <section class="card">
+      <h2>硬體測試（第一天就該做）</h2>
+      <div class="row">
+        <button id="sweepBtn">播放 15→20 kHz 掃頻（5 秒）</button>
+        <label>單一頻率 (Hz)<input id="toneF" type="number" value="18000" min="1000" max="22000" step="100"></label>
+        <button id="toneBtn">播放 2 秒</button>
+      </div>
+      <p class="hint">接收端手機打開「即時診斷」頻譜，看掃頻時哪一段頻率還看得到，就知道這組喇叭＋麥克風能用到多高的頻率，再回頭選「起始頻率」。</p>
+    </section>
+  </div>
+</main>
+
+<div id="emg" role="alertdialog" aria-live="assertive"><div id="emgText"></div><button id="emgOk">我知道了</button></div>
+
+<script>/*MODEM*/</script>
+<script>
+{
+const M = window.HFModem, $ = id => document.getElementById(id);
+
+// ---------- 模板（離線內建，多語） ----------
+const ST = [['臺北','Taipei','台北'],['板橋','Banqiao','板橋'],['桃園','Taoyuan','桃園'],['新竹','Hsinchu','新竹'],
+  ['臺中','Taichung','台中'],['嘉義','Chiayi','嘉義'],['臺南','Tainan','台南'],['高雄','Kaohsiung','高雄']];
+const TPL = {
+  1: { name:'列車延誤', p1:'分鐘', st:false, t:{
+    zh:'本列車延誤約 {p1} 分鐘，造成不便敬請見諒', en:'This train is delayed by about {p1} minutes. We apologize for the inconvenience.', ja:'この列車は約{p1}分遅れています。ご迷惑をおかけしております。'}},
+  2: { name:'變更月台', p1:'月台', st:true, t:{
+    zh:'往{st}的列車改至第 {p1} 月台發車', en:'The train to {st} will now depart from Platform {p1}.', ja:'{st}行きの列車は{p1}番線に変更になりました。'}},
+  3: { name:'列車進站', p1:null, st:true, t:{
+    zh:'往{st}的列車即將進站，請退至黃線後方', en:'The train to {st} is arriving. Please stand behind the yellow line.', ja:'{st}行きの列車がまいります。黄色い線の内側までお下がりください。'}},
+  4: { name:'末班車', p1:'分鐘', st:true, t:{
+    zh:'往{st}的末班車將於 {p1} 分鐘後發車', en:'The last train to {st} departs in {p1} minutes.', ja:'{st}行きの最終列車は{p1}分後に発車します。'}},
+  5: { name:'暫停營運', p1:null, st:true, t:{
+    zh:'往{st}方向暫停營運，請改搭其他交通工具', en:'Service toward {st} is suspended. Please use alternative transportation.', ja:'{st}方面は運転を見合わせています。他の交通機関をご利用ください。'}},
+  200: { name:'⚠ 緊急疏散', p1:'出口', st:false, emg:true, t:{
+    zh:'緊急疏散！請保持冷靜，往 {p1} 號出口疏散', en:'Emergency evacuation! Stay calm and proceed to Exit {p1}.', ja:'緊急避難！落ち着いて{p1}番出口へ避難してください。'}},
+  201: { name:'⚠ 地震警報', p1:null, st:false, emg:true, t:{
+    zh:'地震警報！請遠離玻璃，蹲低、掩護、穩住', en:'Earthquake alert! Move away from glass. Drop, cover and hold on.', ja:'地震警報！窓から離れ、姿勢を低くして頭を守ってください。'}},
+};
+const LI = { zh:0, en:1, ja:2 };
+function render(msg, lang) {
+  if (msg.type === 'text') return { text: msg.text, emg: false };
+  if (msg.type !== 'template' || !TPL[msg.id]) return { text: '（未知的模板 #' + msg.id + '）', emg: false };
+  const T = TPL[msg.id], st = (ST[msg.p2] || ST[0])[LI[lang]];
+  return { text: T.t[lang].replace('{p1}', msg.p1).replace('{st}', st), emg: !!T.emg };
+}
+
+// ---------- 設定 ----------
+const cfg = () => Object.assign({}, M.DEFAULTS, { f0: +$('f0').value, ts: +$('ts').value });
+function bandInfo() { const c = cfg(), F = M.freqs(c);
+  $('bandInfo').textContent = `使用頻段 ${F[0]}～${F[17]} Hz（18 個頻道、間距 ${c.df} Hz），約 ${Math.round(4 / c.ts)} bit/s。修改後兩端都要一致；接收中改設定會自動重新啟動。`;
+  $('mlab').innerHTML = F.map((f, i) => `<span>${i < 2 ? 'AB'[i] : (i - 2).toString(16).toUpperCase()}</span>`).join('');
+}
+$('meters').innerHTML = Array.from({ length: 18 }, (_, i) => `<div class="${i < 2 ? 's' : ''}"></div>`).join('');
+const bars = [...$('meters').children];
+
+// ---------- 分頁 ----------
+function tab(rx) { $('rxPane').hidden = !rx; $('txPane').hidden = rx;
+  $('tabRx').classList.toggle('on', rx); $('tabTx').classList.toggle('on', !rx);
+  $('tabRx').setAttribute('aria-selected', rx); $('tabTx').setAttribute('aria-selected', !rx); }
+$('tabRx').onclick = () => tab(true); $('tabTx').onclick = () => tab(false);
+if (!/Android|iPhone|iPad|Mobile/i.test(navigator.userAgent)) tab(false);
+
+// ---------- 發送端 ----------
+$('tpl').innerHTML = Object.entries(TPL).map(([k, v]) => `<option value="${k}">#${k} ${v.name}</option>`).join('');
+$('st').innerHTML = ST.map((s, i) => `<option value="${i}">${s[0]}</option>`).join('');
+function payload() {
+  if ($('kind').value === 'txt') return M.encodeText($('txt').value || ' ');
+  return M.encodeTemplate(+$('tpl').value, Math.max(0, Math.min(255, +$('p1').value | 0)), +$('st').value);
+}
+function updTx() {
+  const txt = $('kind').value === 'txt'; $('tplRow').hidden = txt; $('txtRow').hidden = !txt;
+  const T = TPL[$('tpl').value]; $('p1Lab').hidden = !T.p1; $('p1Name').textContent = T.p1 || ''; $('stLab').hidden = !T.st;
+  try { const p = payload(), c = cfg(), n = M.frameSymbols(p, c).length;
+    const r = txt ? $('txt').value : render(M.parsePayload(p), 'zh').text;
+    $('preview').textContent = `字幕預覽：「${r}」｜ 資料 ${p.length} bytes（含錯誤更正共 ${p.length + 2 + c.nsym} bytes）｜ 播放約 ${(n * c.ts).toFixed(2)} 秒`;
+  } catch (e) { $('preview').textContent = '⚠ ' + e.message + '（文字太長，請縮短）'; }
+}
+['kind','tpl','p1','st','txt','f0','ts'].forEach(id => $(id).addEventListener('input', updTx));
+let actx = null;
+function ac() { if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); actx.resume(); return actx; }
+function play(samples, ctx) { const b = ctx.createBuffer(1, samples.length, ctx.sampleRate); b.copyToChannel(samples, 0);
+  const s = ctx.createBufferSource(); s.buffer = b; s.connect(ctx.destination); s.start(); return samples.length / ctx.sampleRate; }
+function send() { try { const ctx = ac(); return play(M.synthesize(payload(), cfg(), ctx.sampleRate, +$('vol').value), ctx); }
+  catch (e) { $('preview').textContent = '⚠ ' + e.message; return 0; } }
+$('sendBtn').onclick = send;
+let loop = null;
+$('loopBtn').onclick = () => {
+  if (loop) { clearTimeout(loop); loop = null; $('loopBtn').classList.remove('on'); $('loopBtn').textContent = '每 3 秒重複發送'; return; }
+  $('loopBtn').classList.add('on'); $('loopBtn').textContent = '停止重複';
+  const go = () => { const d = send(); loop = setTimeout(go, (d + 3) * 1000); }; go();
+};
+$('wavBtn').onclick = () => {
+  const fs = 48000, x = M.synthesize(payload(), cfg(), fs, +$('vol').value), n = x.length;
+  const buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf), w = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVEfmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, fs, true); v.setUint32(28, fs * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) v.setInt16(44 + i * 2, Math.max(-1, Math.min(1, x[i])) * 32767, true);
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+  a.download = `hf_${cfg().f0}_${$('kind').value === 'txt' ? 'text' : 'tpl' + $('tpl').value}.wav`; a.click();
+};
+$('sweepBtn').onclick = () => { const ctx = ac(), fs = ctx.sampleRate, n = fs * 5, x = new Float32Array(n), a = +$('vol').value; let ph = 0;
+  for (let i = 0; i < n; i++) { const f = 15000 + 5000 * i / n; ph += 2 * Math.PI * f / fs; const g = Math.min(1, i / (0.02 * fs), (n - i) / (0.02 * fs)); x[i] = Math.sin(ph) * a * g; }
+  play(x, ctx); };
+$('toneBtn').onclick = () => { const ctx = ac(), fs = ctx.sampleRate, n = fs * 2, f = +$('toneF').value, a = +$('vol').value, x = new Float32Array(n);
+  for (let i = 0; i < n; i++) x[i] = Math.sin(2 * Math.PI * f * i / fs) * a * Math.min(1, i / (0.02 * fs), (n - i) / (0.02 * fs));
+  play(x, ctx); };
+
+// ---------- 接收端 ----------
+let rx = null, rxCtx = null, stream = null, proc = null, an = null, level = null, last = null;
+async function startRx() {
+  if (!window.isSecureContext || !navigator.mediaDevices) {
+    $('rxStatus').innerHTML = '<span class="bad">這個網址不是 HTTPS，瀏覽器不允許使用麥克風。請用 GitHub Pages 等 HTTPS 網址開啟。</span>'; return; }
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 } });
+  } catch (e) { $('rxStatus').innerHTML = '<span class="bad">無法使用麥克風：' + e.message + '</span>'; return; }
+  rxCtx = new (window.AudioContext || window.webkitAudioContext)(); await rxCtx.resume();
+  const src = rxCtx.createMediaStreamSource(stream);
+  an = rxCtx.createAnalyser(); an.fftSize = 8192; an.smoothingTimeConstant = 0.5; src.connect(an);
+  proc = rxCtx.createScriptProcessor(4096, 1, 1); const mute = rxCtx.createGain(); mute.gain.value = 0;
+  src.connect(proc); proc.connect(mute); mute.connect(rxCtx.destination);
+  makeRx(); proc.onaudioprocess = e => rx && rx.push(e.inputBuffer.getChannelData(0));
+  $('sFs').textContent = rxCtx.sampleRate + ' Hz';
+  $('rxBtn').textContent = '停止接收'; $('rxBtn').classList.remove('pri');
+  $('rxStatus').textContent = '接收中… 讓手機靠近發送端喇叭（先試 1～2 公尺）。';
+  requestAnimationFrame(draw);
+}
+function makeRx() {
+  rx = new M.Receiver(rxCtx.sampleRate, cfg(), onMsg, (P, score, pw) => { level = { P, score }; });
+}
+function stopRx() { proc && (proc.onaudioprocess = null); stream && stream.getTracks().forEach(t => t.stop()); rxCtx && rxCtx.close();
+  rx = rxCtx = stream = proc = an = null; $('rxBtn').textContent = '開始接收'; $('rxBtn').classList.add('pri'); $('rxStatus').textContent = '已停止。'; }
+$('rxBtn').onclick = () => rx ? stopRx() : startRx();
+['f0', 'ts'].forEach(id => $(id).addEventListener('change', () => { bandInfo(); if (rx) makeRx(); }));
+function showBoard() {
+  if (!last) return; const r = render(last.msg, $('lang').value), b = $('board');
+  b.classList.remove('idle');
+  b.innerHTML = '';
+  b.append(document.createTextNode(r.text));
+  const sm = document.createElement('small'); sm.textContent = `${last.time} 收到 ｜ 自動修正 ${last.fixed} 個位元組錯誤`; b.append(sm);
+  return r;
+}
+$('lang').onchange = showBoard;
+function onMsg(m) {
+  $('sOk').textContent = m.stats.ok; $('sFail').textContent = m.stats.fail;
+  const li = document.createElement('li'), time = new Date().toLocaleTimeString();
+  if (!m.ok) { li.className = 'bad'; li.textContent = `${time} 偵測到訊號但解碼失敗（${m.error}）`; $('log').prepend(li); return; }
+  const msg = M.parsePayload(m.payload); last = { msg, fixed: m.fixed, time };
+  const r = showBoard(); li.textContent = `${time} ${render(msg, 'zh').text}${m.fixed ? `（修正 ${m.fixed}）` : ''}`; $('log').prepend(li);
+  if (r.emg) { $('emgText').textContent = r.text; $('emg').classList.add('show');
+    try { navigator.vibrate && navigator.vibrate([400, 200, 400, 200, 800]); } catch (e) {} }
+  else { try { navigator.vibrate && navigator.vibrate(120); } catch (e) {} }
+}
+$('emgOk').onclick = () => $('emg').classList.remove('show');
+const cv = $('spec'), g = cv.getContext('2d');
+function draw() {
+  if (!rx) return;
+  if (level) { const mx = Math.max(...level.P) + 1e-12;
+    level.P.forEach((p, i) => bars[i].style.height = Math.max(2, 100 * Math.sqrt(p / mx) * Math.min(1, Math.log10(1 + p * 1e6) / 3)) + '%');
+    $('sScore').textContent = level.score.toFixed(2); $('scoreBar').style.width = Math.min(100, level.score * 100) + '%'; }
+  if (an) { const W = cv.clientWidth, H = cv.clientHeight, d = devicePixelRatio || 1;
+    if (cv.width !== W * d) { cv.width = W * d; cv.height = H * d; }
+    const a = new Float32Array(an.frequencyBinCount); an.getFloatFrequencyData(a);
+    const hz = rxCtx.sampleRate / an.fftSize, lo = Math.floor(14000 / hz), hi = Math.min(a.length - 1, Math.ceil(22000 / hz));
+    g.setTransform(d, 0, 0, d, 0, 0); g.clearRect(0, 0, W, H);
+    const c = cfg(), F = M.freqs(c), x = f => (f - 14000) / 8000 * W;
+    g.fillStyle = 'rgba(10,99,255,.12)'; g.fillRect(x(F[0] - 50), 0, x(F[17] + 50) - x(F[0] - 50), H);
+    g.strokeStyle = '#0a63ff'; g.lineWidth = 1.5; g.beginPath();
+    for (let i = lo; i <= hi; i++) { const y = H - (Math.max(-130, Math.min(-20, a[i])) + 130) / 110 * H; i === lo ? g.moveTo(x(i * hz), y) : g.lineTo(x(i * hz), y); }
+    g.stroke(); g.fillStyle = getComputedStyle(document.body).color; g.font = '11px system-ui';
+    [14, 16, 18, 20, 22].forEach(k => g.fillText(k + 'k', Math.min(W - 22, x(k * 1000) + 2), H - 4)); }
+  requestAnimationFrame(draw);
+}
+bandInfo(); updTx();
+}
+</script>
+</body>
+</html>
